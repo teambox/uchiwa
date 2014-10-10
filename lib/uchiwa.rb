@@ -1,4 +1,4 @@
-require "uchiwa/version"
+require 'uchiwa/version'
 
 module Uchiwa
   # Your code goes here...
