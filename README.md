@@ -20,7 +20,30 @@ Or install it yourself as:
 
 ## Usage
 
-TODO: Write usage instructions here
+### Setup and get ephemeral access token
+
+```ruby
+client = Uchiwa::Client.new(:username => 'USERNAME', :password => 'PASSWORD')
+client.access_token   # => nil
+client.entrypoint     # => nil
+client.discover!      # AutoDiscoverying to get access token and entrypoint to the API using user credentials.
+client.access_token   # => "cwt=AAEB...buHc"
+client.entrypoint     # => "https://lyncweb.contoso.com/ucwa/oauth/v1/applications"
+```
+
+or setup with access token
+
+```ruby
+client = Uchiwa::Client.new(:access_token => "cwt=AAEB...buHc")
+client.access_token   # => "cwt=AAEB...buHc"
+client.entrypoint     # => nil
+client.discover!
+client.access_token   # => "cwt=AAEB...buHc"
+client.entrypoint     # => "https://lyncweb.contoso.com/ucwa/oauth/v1/applications"
+```
+
+### Access anywhere
+
 
 ## Contributing
 
