@@ -14,27 +14,39 @@ module Uchiwa
     module Resource
       module Discover
         def discover
-          discoverer = Hyperclient.new('https://lyncdiscover.gotuc.net')   # FIXME
-          headers = discoverer.user._get.headers
-          @oauth_url = headers['www-authenticate'].to_s.match(/href=\"([^\"]*)/)[1]
+          discoverer = Hyperclient.new('http://lyncdiscover.metio.net') do |client|
+            client.connection do |conn|
+              conn.use Faraday::Response::Logger
+            end
+          end
+          begin
+            headers = discoverer.user._get.headers
+          rescue => e1
+          end
+          puts "get_headers.message = #{e1.response[:message]}"
+          @oauth_url = e1.response[:headers]['www-authenticate'].to_s.match(/href=\"([^\"]*)/)[1]
+          # @oauth_url = headers['www-authenticate'].to_s.match(/href=\"([^\"]*)/)[1]
           discoverer.headers.update('Authorization' => "Bearer #{access_token}")
 
           url = discoverer.user.applications.to_s.sub(/\/ucwa.*/, '')
           entry_point = Hyperclient::EntryPoint.new(url)
           entry_point.headers.update('Authorization' => "Bearer #{access_token}")
-          response = discoverer.user.applications._post(application)
-
-          if response.success?
-            Hyperclient::Resource.new(response.body, entry_point, response)
-          else
-            Hyperclient::Resource.new(nil, entry_point, response)
+          begin
+            response = discoverer.user.applications._post(application)
+          rescue => e2
           end
+          if e2.response[:success] == 200
+            app_resource = Hyperclient::Resource.new(e3.response[:body], entry_point, e2.response)
+          else
+            app_resource = Hyperclient::Resource.new(nil, entry_point, e2.response)
+          end
+          puts "app_resource.response = #{app_resource._response}"
         end
 
         def application
           {
             :UserAgent  => "UCWA Samples",
-            :EndpointId => "a917c6f4-976c-4cf3-847d-cdfffa28ccdf",  # TODO: SecureRandom.uuid
+            :EndpointId => SecureRandom.uuid,
             :Culture    => "en-US",
           }
         end
