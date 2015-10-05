@@ -15,39 +15,35 @@ module Uchiwa
     module Resource
       module Discover
         def discover
-          log = Logger.new(STDOUT)
-          log.level = Logger::DEBUG
-          discoverer = Hyperclient.new('https://lyncdiscover.metio.net') do |client|
-            client.connection do |conn|
-              conn.response :logger, log, bodies: true
-            end
-          end
-          discoverer.headers.update('Content-Type' =>	'application/json')
+          @discoverer = Hyperclient.new('https://lyncdiscover.metio.net')
+          @discoverer.connection.response :logger, @log, bodies: true
+          @discoverer.headers.update('Content-Type' =>	'application/json')
+          @discoverer.headers.update('X-Ms-Origin' => 'http://localhost')
 
           begin
-            headers = discoverer.user._get.headers
+            headers = @discoverer.user._get.headers
           rescue Faraday::Error::ClientError => e1
             headers = e1.response[:headers]
           end
 
           @oauth_url = headers['www-authenticate'].to_s.match(/href=\"([^\"]*)/)[1]
+          @xframe_url = @discoverer._links[:xframe]
+          @discoverer.headers.update('Authorization' => "#{access_token}")
+          @discoverer.headers.update('Referer' => "#{@xframe_url}")
+          url = @discoverer.user.applications.to_s.sub(/\/ucwa.*/, '')
 
-          # begin
-            # discoverer.xframe._post(@oauth_url)
-          # rescue Faraday::Error::ClientError => e10 - get token - not needed in sandbox
-          # end
+          entry_point = Hyperclient::EntryPoint.new(url)
+          entry_point.connection.response :logger, @log, bodies: true
+          entry_point.headers.update('Content-Type' =>	'application/json')
+          entry_point.headers.update('Authorization' => "#{access_token}")
 
-          discoverer.headers.update('Authorization' => "#{access_token}")
-          # url = discoverer.user.applications.to_s.sub(/\/ucwa.*/, '')
-          # entry_point = Hyperclient::EntryPoint.new(url)
-          # entry_point.headers.update('Authorization' => "#{access_token}")
-
-          application = discoverer.user.applications._post(application_id.to_json)
-          # if application._success?
-            # Hyperclient::Resource.new(application, discoverer, application._response)
-          # else
-            # Hyperclient::Resource.new(nil, entry_point, _response)
-          # end
+          response = @discoverer.user.applications._post(application_id.to_json)
+          if response._success?
+            body = response._response.body.dup
+            @application = Hyperclient::Resource.new(body, entry_point, response._response)
+          else
+            @application = Hyperclient::Resource.new(nil, entry_point, response._response)
+          end
         end
 
         def application_id
@@ -67,6 +63,21 @@ module Uchiwa
         def oauth
           client = Hyperclient.new(@oauth_url)
           client  # TODO
+        end
+
+        # TODO: This will work only via conditional request PUT (with the If-Match: "{ETag value}"
+        def make_available body
+          @application.me.makeMeAvailable._post(body.to_json)
+        end
+
+        def get_contact_list
+          # @application._embedded._get.people.myContacts
+          @contacts = @application.people.myContacts
+        end
+
+        def search(query,
+                   limit = 100)
+          @found_contacts = @application.people._get.search(query, limit)
         end
       end
     end
