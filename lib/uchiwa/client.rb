@@ -37,10 +37,10 @@ module Uchiwa
           # rescue Faraday::Error::ClientError => e10 - get token - not needed in sandbox
           # end
 
-          discoverer.headers.update('Authorization' => "Bearer #{access_token}")
+          discoverer.headers.update('Authorization' => "#{access_token}")
           # url = discoverer.user.applications.to_s.sub(/\/ucwa.*/, '')
           # entry_point = Hyperclient::EntryPoint.new(url)
-          # entry_point.headers.update('Authorization' => "Bearer #{access_token}")
+          # entry_point.headers.update('Authorization' => "#{access_token}")
 
           application = discoverer.user.applications._post(application_id.to_json)
           # if application._success?
