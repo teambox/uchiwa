@@ -1,7 +1,8 @@
 # coding: utf-8
 require 'hyperclient'
 require 'json/ext'
-require 'angelo'
+require '../lib/scheduler'
+require '../lib/event_channel'
 
 module Uchiwa
   class Client
@@ -45,12 +46,9 @@ module Uchiwa
                                                      { 'href' => "#{search_uri}/{?query,limit}",
                                                        'templated' => true } } },
                                                  @entry_point)
+
           event_channel_url = @application.events._url
-          # @event_channel = Hyperclient::Resource.new(event_channel_url, @entry_point)
-          @event_channel = Hyperclient::Resource.new({ '_links' =>
-                                                       {'events' =>
-                                                         {'href' => "#{event_channel_url}"}}},
-                                                     @entry_point)
+          @scheduler = Scheduler.new(event_channel_url, @entry_point)
         end
 
         def application_id
@@ -109,10 +107,6 @@ module Uchiwa
         def get_contact_presence(contact)
           contact.contactPresence._get
         end
-
-        def event_channel_poll
-          @event_channel = @event_channel.events._get
-        end
       end
     end
 
@@ -131,36 +125,6 @@ module Uchiwa
     include Resource::Discover
   end
 
-  class EventChannelServer < Angelo::Base
-    addr '0.0.0.0'
-    port 8080
-    ping_time 3
-    report_errors!
-    log_level Logger::DEBUG
-
-    def pong; 'pong'; end
-
-    def hello; 'Hello there!'; end
-
-    task :hello do
-      hello
-    end
-
-    task :pong do
-      pong
-    end
-
-    get '/' do
-      # async :hello
-      hello
-    end
-
-    get '/ping' do
-      # async :pong
-      pong
-    end
-  end
-
   def Uchiwa.start_event_channel_server(logger)
     @server_pid = fork do
       logger.info('Starting event channel!')
@@ -172,7 +136,7 @@ module Uchiwa
       end
 
       begin
-        Uchiwa::EventChannelServer.run!
+        EventChannelServer.run!
       rescue => e
         logger.error("ERROR => #{e}\n#{e.inspect}")
       end
