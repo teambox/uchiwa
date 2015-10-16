@@ -31,11 +31,11 @@ module Uchiwa
 
           # Here would be a GET request to @oauth_url for access_token
 
-          set_headers discoverer
+          Uchiwa.set_headers discoverer, @config[:access_token]
 
           @entry_point = Hyperclient::EntryPoint.new(discoverer.user.applications.to_s.sub(/\/ucwa.*/, ''))
           @entry_point.connection.response :logger, @config[:logger], bodies: true
-          set_headers @entry_point
+          Uchiwa.set_headers @entry_point, @config[:access_token]
 
           response = discoverer.user.applications._post(application_id.to_json)
           @application = Hyperclient::Resource.new(response._response.body, @entry_point,
@@ -48,7 +48,7 @@ module Uchiwa
                                                  @entry_point)
 
           event_channel_url = @application.events._url
-          @scheduler = Scheduler.new(event_channel_url, @entry_point)
+          @scheduler = Scheduler.new(event_channel_url, @config[:access_token], @entry_point)
         end
 
         def application_id
@@ -57,30 +57,6 @@ module Uchiwa
             :EndpointId => SecureRandom.uuid,
             :Culture    => "en-US",
           }
-        end
-
-        def access_token
-          @config[:access_token] ||= begin
-            oauth
-          end
-        end
-
-        def oauth
-          client = Hyperclient.new(@oauth_url)
-          client  # TODO
-        end
-
-        def set_headers(end_point, etag = '')
-          end_point.headers.update('Content-Type' =>	'application/json')
-          end_point.headers.update('Authorization' => "#{access_token}")
-
-          # This is barely needed - for browsers only
-          # end_point.headers.update('X-Ms-Origin' => 'http://localhost')
-
-          end_point.headers.update('Referer' => "#{@xframe_url}")
-
-          # This should be reimplemented to be automatically set on PUT requests if needed
-          end_point.headers.update('If-Match' => etag) unless etag.empty?
         end
 
         def make_available body
@@ -123,6 +99,19 @@ module Uchiwa
     # end
 
     include Resource::Discover
+  end
+
+  def Uchiwa.set_headers(end_point, access_token, etag = '')
+    end_point.headers.update('Content-Type' =>	'application/json')
+    end_point.headers.update('Authorization' => "#{access_token}")
+
+    # This is barely needed - for browsers only
+    # end_point.headers.update('X-Ms-Origin' => 'http://localhost')
+
+    end_point.headers.update('Referer' => "#{@xframe_url}")
+
+    # This should be reimplemented to be automatically set on PUT requests if needed
+    end_point.headers.update('If-Match' => etag) unless etag.empty?
   end
 
   def Uchiwa.start_event_channel_server(logger)
