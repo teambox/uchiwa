@@ -17,7 +17,7 @@ module Uchiwa
       module Discover
         def discover
           discoverer = Hyperclient.new('https://lyncdiscover.metio.net')
-          discoverer.connection.response :logger, @config[:logger], bodies: true
+          discoverer.connection.builder.insert_before discoverer.connection.builder.handlers.length - 1, Faraday::Response::Logger, @config[:logger], bodies: true
           discoverer.headers.update('Content-Type' => 'application/json')
 
           begin
@@ -34,7 +34,7 @@ module Uchiwa
           Uchiwa.set_headers discoverer, @config[:access_token]
 
           @entry_point = Hyperclient::EntryPoint.new(discoverer.user.applications.to_s.sub(/\/ucwa.*/, ''))
-          @entry_point.connection.response :logger, @config[:logger], bodies: true
+          @entry_point.connection.builder.insert_before @entry_point.connection.builder.handlers.length - 1, :logger, @config[:logger], bodies: true
           Uchiwa.set_headers @entry_point, @config[:access_token]
 
           response = discoverer.user.applications._post(application_id.to_json)
