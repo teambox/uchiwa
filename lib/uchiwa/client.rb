@@ -33,8 +33,9 @@ module Uchiwa
 
           Uchiwa.set_headers discoverer, @config[:access_token]
 
+          entry_point_url = discoverer.user.applications.to_s.sub(/\/ucwa.*/, '')
           @entry_point = Hyperclient::EntryPoint.new(discoverer.user.applications.to_s.sub(/\/ucwa.*/, ''))
-          @entry_point.connection.builder.insert_before @entry_point.connection.builder.handlers.length - 1, :logger, @config[:logger], bodies: true
+          @entry_point.connection.builder.insert_before @entry_point.connection.builder.handlers.length - 1, Faraday::Response::Logger, @config[:logger], bodies: true
           Uchiwa.set_headers @entry_point, @config[:access_token]
 
           response = discoverer.user.applications._post(application_id.to_json)
@@ -48,7 +49,7 @@ module Uchiwa
                                                  @entry_point)
 
           event_channel_url = @application.events._url
-          @scheduler = Scheduler.new(event_channel_url, @config[:access_token], @entry_point)
+          @scheduler = Scheduler.new(event_channel_url, @config[:access_token], entry_point_url)
         end
 
         def application_id
