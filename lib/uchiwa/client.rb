@@ -1,46 +1,76 @@
 # coding: utf-8
 require 'hyperclient'
 require 'json/ext'
+# require '../lib/logger_override'
 require '../lib/scheduler'
 require '../lib/event_channel'
+require '../lib/event_handler'
+require '../lib/report_activity'
 
 module Uchiwa
   class Client
-    availability = {0 => :Away, 1 => :BeRightBack, 2 => :Busy, 3 => :DoNotDisturb, 4 => :IdleBusy,
+    attr_accessor :access_token, :name, :domain
+
+    include Celluloid
+    include Celluloid::Notifications
+    include Celluloid::Logger
+
+    ACTIVITY_TIMEOUT = 60
+
+    Availability = {0 => :Away, 1 => :BeRightBack, 2 => :Busy, 3 => :DoNotDisturb, 4 => :IdleBusy,
                     5 => :IdleOnline, 6 => :Offline, 7 => :Online}
 
-    def initialize(config = {})
-      @config = config
+    def initialize
+      yield self
+      @logger = ::Logger.new(STDOUT, 'daily')
+      @logger.attach("../logs/#{@name}_client.log")
+      Celluloid.logger = @logger
+      @application_id = set_application_id
+      @ucwa_entrance = auto_discover @domain
+      @entry_point_url = @ucwa_entrance.user.applications.to_s.sub(/\/ucwa.*/, '')
+      @application = register_application @entry_point_url
+      set_application_resources
+      @scheduler = Scheduler.new do |s|
+        s.url = @event_channel_url
+        s.access_token = @access_token
+        s.entry_point = @entry_point_url
+        s.name = @name
+      end
+      subscribe "Lync_#{@name} event", :application_refresh
+      @logger.info 'Scheduler subscribed to Lync events'
     end
 
     module Resource
       module Discover
-        def discover
-          discoverer = Hyperclient.new('https://lyncdiscover.metio.net')
-          discoverer.connection.builder.insert_before discoverer.connection.builder.handlers.length - 1, Faraday::Response::Logger, @config[:logger], bodies: true
+        def auto_discover domain
+          discoverer = Hyperclient.new("http://lyncdiscover.#{domain}")
+          discoverer.connection.builder.insert_before discoverer.connection.builder.handlers.length - 1, Faraday::Response::Logger, @logger, bodies: true
           discoverer.headers.update('Content-Type' => 'application/json')
 
           begin
             discoverer.user._get.headers
           rescue Faraday::Error::ClientError => e1
-            headers = e1.response[:headers]
+            @oauth_url = e1.response[:headers]['www-authenticate'].to_s.match(/href=\"([^\"]*)/)[1]
           end
 
-          @oauth_url = headers['www-authenticate'].to_s.match(/href=\"([^\"]*)/)[1]
           @xframe_url = discoverer._links[:xframe]
 
           # Here would be a GET request to @oauth_url for access_token
 
-          Uchiwa.set_headers discoverer, @config[:access_token]
+          Uchiwa.set_headers discoverer, @access_token
+          return discoverer
+        end
 
-          entry_point_url = discoverer.user.applications.to_s.sub(/\/ucwa.*/, '')
-          @entry_point = Hyperclient::EntryPoint.new(discoverer.user.applications.to_s.sub(/\/ucwa.*/, ''))
-          @entry_point.connection.builder.insert_before @entry_point.connection.builder.handlers.length - 1, Faraday::Response::Logger, @config[:logger], bodies: true
-          Uchiwa.set_headers @entry_point, @config[:access_token]
+        def register_application url
+          @entry_point = Hyperclient::EntryPoint.new(url)
+          @entry_point.connection.builder.insert_before @entry_point.connection.builder.handlers.length - 1, Faraday::Response::Logger, @logger, bodies: true
+          Uchiwa.set_headers @entry_point, @access_token
 
-          response = discoverer.user.applications._post(application_id.to_json)
-          @application = Hyperclient::Resource.new(response._response.body, @entry_point,
-                                                   response._response)
+          response = @ucwa_entrance.user.applications._post(@application_id.to_json)
+          Hyperclient::Resource.new(response._response.body, @entry_point, response._response)
+        end
+
+        def set_application_resources
           search_uri = @application.people.search._url
           @searcher = Hyperclient::Resource.new( { '_links' =>
                                                    { 'search' =>
@@ -48,11 +78,14 @@ module Uchiwa
                                                        'templated' => true } } },
                                                  @entry_point)
 
-          event_channel_url = @application.events._url
-          @scheduler = Scheduler.new(event_channel_url, @config[:access_token], entry_point_url)
+          @event_channel_url = @application.events._url
+          # @report_activity_loop = ReportActivity.new(@application, @logger)
+          @activity_timer = every(ACTIVITY_TIMEOUT) do
+            @application.me.reportMyActivity._post('')
+          end
         end
 
-        def application_id
+        def set_application_id
           {
             :UserAgent  => "UCWA Samples",
             :EndpointId => SecureRandom.uuid,
@@ -65,20 +98,37 @@ module Uchiwa
           @application = @application.itself._get
         end
 
+        def application_refresh
+          @application = @application.itself._get
+        end
+
         def get_my_presence
           @my_presence = @application.me.presence._get
         end
 
         def set_my_presence(availability)
           @application.me.presence._post({'availability' => availability}.to_json)
+          # @my_presence = @application.me.presence._get
+        end
 
-          # The following barely needed - should see what event receiving will bring
-          @application = @application.itself._get
-          @my_presence = @application.me.presence._get
+        def get_presence_subscriptions
+          @presence_subscriptions = @application.people.presenceSubscriptions._get
+        end
+
+        def get_subscribed_contacts
+          @subscribed_contacts = @application.people.subscribedContacts._get
         end
 
         def search(query, limit = 100)
           @searcher.search({query: query, limit: limit})._resource
+        end
+
+        def get_my_contacts
+          @my_contacts = @application.people.myContacts._get
+        end
+
+        def get_my_groups
+          @my_groups = @application.people.myGroups._get
         end
 
         def get_contact_presence(contact)
@@ -117,10 +167,10 @@ module Uchiwa
 
   def Uchiwa.start_event_channel_server(logger)
     @server_pid = fork do
-      logger.info('Starting event channel!')
+      logger.info('Starting event channel server!')
       Signal.trap("HUP") do
         t = Thread.new do
-          logger.info('SIGHUP received, exiting!')
+          logger.info('SIGHUP received, exiting event channel server!')
         end
         exit
       end
