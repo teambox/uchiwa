@@ -1,11 +1,12 @@
 # coding: utf-8
 require 'hyperclient'
 require 'json/ext'
+require 'celluloid/current'
 # require '../lib/logger_override'
 require '../lib/scheduler'
 require '../lib/event_channel'
 require '../lib/event_handler'
-require '../lib/report_activity'
+
 
 module Uchiwa
   class Client
@@ -13,9 +14,15 @@ module Uchiwa
 
     include Celluloid
     include Celluloid::Notifications
-    include Celluloid::Logger
+    include Celluloid::Internals::Logger
 
     ACTIVITY_TIMEOUT = 60
+
+    Signing_Options = { random_property_name: 'please pass this in a PUT request',
+                        signInAs: 'Online',
+                        supportedMessageFormats: [ 'Plain', 'Html'],
+                        supportedModalities: ['PhoneAudio', 'Messaging'],
+                        rel: 'communication'}
 
     Availability = {0 => :Away, 1 => :BeRightBack, 2 => :Busy, 3 => :DoNotDisturb, 4 => :IdleBusy,
                     5 => :IdleOnline, 6 => :Offline, 7 => :Online}
@@ -36,8 +43,6 @@ module Uchiwa
         s.entry_point = @entry_point_url
         s.name = @name
       end
-      subscribe "Lync_#{@name} event", :application_refresh
-      @logger.info 'Scheduler subscribed to Lync events'
     end
 
     module Resource
@@ -80,9 +85,12 @@ module Uchiwa
 
           @event_channel_url = @application.events._url
           # @report_activity_loop = ReportActivity.new(@application, @logger)
+
           @activity_timer = every(ACTIVITY_TIMEOUT) do
             @application.me.reportMyActivity._post('')
+            @logger.info "reportMyActivity request sent"
           end
+          make_available Signing_Options
         end
 
         def set_application_id
@@ -163,27 +171,5 @@ module Uchiwa
 
     # This should be reimplemented to be automatically set on PUT requests if needed
     end_point.headers.update('If-Match' => etag) unless etag.empty?
-  end
-
-  def Uchiwa.start_event_channel_server(logger)
-    @server_pid = fork do
-      logger.info('Starting event channel server!')
-      Signal.trap("HUP") do
-        t = Thread.new do
-          logger.info('SIGHUP received, exiting event channel server!')
-        end
-        exit
-      end
-
-      begin
-        EventChannelServer.run!
-      rescue => e
-        logger.error("ERROR => #{e}\n#{e.inspect}")
-      end
-    end
-  end
-
-  def Uchiwa.stop_event_channel_server
-    Process.kill('HUP', @server_pid)
   end
 end
