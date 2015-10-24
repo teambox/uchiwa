@@ -18,7 +18,7 @@ module Uchiwa
 
     ACTIVITY_TIMEOUT = 60
 
-    Signing_Options = { random_property_name: 'please pass this in a PUT request',
+    SigningOptions = { random_property_name: 'please pass this in a PUT request',
                         signInAs: 'Online',
                         supportedMessageFormats: [ 'Plain', 'Html'],
                         supportedModalities: ['PhoneAudio', 'Messaging'],
@@ -36,6 +36,7 @@ module Uchiwa
       @ucwa_entrance = auto_discover @domain
       @entry_point_url = @ucwa_entrance.user.applications.to_s.sub(/\/ucwa.*/, '')
       @application = register_application @entry_point_url
+      @logger.info("\n\n@application._links = #{@application._links.inspect}")
       set_application_resources
       @scheduler = Scheduler.new do |s|
         s.url = @event_channel_url
@@ -47,7 +48,7 @@ module Uchiwa
 
     module Resource
       module Discover
-        def auto_discover domain
+        def auto_discover(domain)
           discoverer = Hyperclient.new("http://lyncdiscover.#{domain}")
           discoverer.connection.builder.insert_before discoverer.connection.builder.handlers.length - 1, Faraday::Response::Logger, @logger, bodies: true
           discoverer.headers.update('Content-Type' => 'application/json')
@@ -55,7 +56,7 @@ module Uchiwa
           begin
             discoverer.user._get.headers
           rescue Faraday::Error::ClientError => e1
-            @oauth_url = e1.response[:headers]['www-authenticate'].to_s.match(/href=\"([^\"]*)/)[1]
+            @oauth_url = e1.response[:headers]['www-authenticate'].to_s.match(/href="([^"]*)/)[1]
           end
 
           @xframe_url = discoverer._links[:xframe]
@@ -63,10 +64,10 @@ module Uchiwa
           # Here would be a GET request to @oauth_url for access_token
 
           Uchiwa.set_headers discoverer, @access_token
-          return discoverer
+          discoverer
         end
 
-        def register_application url
+        def register_application(url)
           @entry_point = Hyperclient::EntryPoint.new(url)
           @entry_point.connection.builder.insert_before @entry_point.connection.builder.handlers.length - 1, Faraday::Response::Logger, @logger, bodies: true
           Uchiwa.set_headers @entry_point, @access_token
@@ -79,29 +80,28 @@ module Uchiwa
           search_uri = @application.people.search._url
           @searcher = Hyperclient::Resource.new( { '_links' =>
                                                    { 'search' =>
-                                                     { 'href' => "#{search_uri}/{?query,limit}",
+                                                     {'href' => "#{search_uri}/{?query,limit}",
                                                        'templated' => true } } },
                                                  @entry_point)
 
           @event_channel_url = @application.events._url
-          # @report_activity_loop = ReportActivity.new(@application, @logger)
 
           @activity_timer = every(ACTIVITY_TIMEOUT) do
             @application.me.reportMyActivity._post('')
-            @logger.info "reportMyActivity request sent"
+            @logger.info 'reportMyActivity request sent'
           end
-          make_available Signing_Options
+          make_available SigningOptions
         end
 
         def set_application_id
           {
-            :UserAgent  => "UCWA Samples",
+            :UserAgent  => 'UCWA Samples',
             :EndpointId => SecureRandom.uuid,
-            :Culture    => "en-US",
+            :Culture    => 'en-US',
           }
         end
 
-        def make_available body
+        def make_available(body)
           @application.me.makeMeAvailable._post(body.to_json)
           @application = @application.itself._get
         end
@@ -116,7 +116,6 @@ module Uchiwa
 
         def set_my_presence(availability)
           @application.me.presence._post({'availability' => availability}.to_json)
-          # @my_presence = @application.me.presence._get
         end
 
         def get_presence_subscriptions
