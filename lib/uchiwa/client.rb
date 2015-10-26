@@ -2,7 +2,6 @@
 require 'hyperclient'
 require 'json/ext'
 require 'celluloid/current'
-# require '../lib/logger_override'
 require '../lib/scheduler'
 require '../lib/event_channel'
 require '../lib/event_handler'
@@ -11,6 +10,7 @@ require '../lib/event_handler'
 module Uchiwa
   class Client
     attr_accessor :access_token, :name, :domain
+    attr_reader :entry_point, :my_groups
 
     include Celluloid
     include Celluloid::Notifications
@@ -140,6 +140,23 @@ module Uchiwa
 
         def get_contact_presence(contact)
           contact.contactPresence._get
+        end
+
+        def subscribe_to_group_presence(group_name)
+          uris = []
+          @my_groups._embedded.group.each do |g|
+            if g[:name] == group_name
+              group_contacts = g.groupContacts._get._response.body.to_json
+              group_contacts = JSON.parse(group_contacts, object_class: OpenStruct)
+              group_contacts._embedded.contact.each_index do |i|
+                uris[i] = group_contacts._embedded.contact[i].uri
+                i += 1
+              end
+              g.subscribeToGroupPresence._post({:duration => ENV['CONTACT_SUBSCRIPTION_DURATION'],
+                                                                 :uris => uris}.to_json)
+            end
+          end
+
         end
       end
     end
