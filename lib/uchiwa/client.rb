@@ -1,6 +1,7 @@
 # coding: utf-8
 require 'hyperclient'
 require 'json/ext'
+require '../lib/logger_override'
 require 'celluloid/current'
 require '../lib/scheduler'
 require '../lib/event_channel'
@@ -115,7 +116,7 @@ module Uchiwa
         end
 
         def set_my_presence(availability)
-          @application.me.presence._post({'availability' => availability}.to_json)
+          @application.me.presence._post({ availability: availability }.to_json)
         end
 
         def get_presence_subscriptions
@@ -138,6 +139,19 @@ module Uchiwa
           @my_groups = @application.people.myGroups._get
         end
 
+        def get_my_phones
+          @my_phones = @application.me.phones._get
+        end
+
+        def change_number(number = '', visible = false, type)
+          @my_phones.phone.each do |ph|
+            if ph.changeNumber.to_s.include?("#{type}")
+              @entry_point.headers.update('If-Match' => ph.etag)
+              ph.changeNumber._post({ number: number, includeInContactCard: visible }.to_json)
+            end
+          end
+        end
+
         def get_contact_presence(contact)
           contact.contactPresence._get
         end
@@ -156,7 +170,6 @@ module Uchiwa
                                                                  :uris => uris}.to_json)
             end
           end
-
         end
       end
     end
@@ -186,6 +199,6 @@ module Uchiwa
     end_point.headers.update('Referer' => "#{@xframe_url}")
 
     # This should be reimplemented to be automatically set on PUT requests if needed
-    end_point.headers.update('If-Match' => etag) unless etag.empty?
+    # end_point.headers.update('If-Match' => etag) unless etag.empty?
   end
 end
