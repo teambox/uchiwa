@@ -7,32 +7,20 @@ require '../lib/scheduler'
 require '../lib/event_channel'
 require '../lib/event_handler'
 
-
 module Uchiwa
   class Client
     attr_accessor :access_token, :name, :domain
-    attr_reader :entry_point, :my_groups
 
     include Celluloid
     include Celluloid::Notifications
     include Celluloid::Internals::Logger
-
-    ACTIVITY_TIMEOUT = 60
-
-    SigningOptions = { random_property_name: 'please pass this in a PUT request',
-                        signInAs: 'Online',
-                        supportedMessageFormats: [ 'Plain', 'Html'],
-                        supportedModalities: ['PhoneAudio', 'Messaging'],
-                        rel: 'communication'}
-
-    Availability = {0 => :Away, 1 => :BeRightBack, 2 => :Busy, 3 => :DoNotDisturb, 4 => :IdleBusy,
-                    5 => :IdleOnline, 6 => :Offline, 7 => :Online}
 
     def initialize
       yield self
       @logger = ::Logger.new(STDOUT, 'daily')
       @logger.attach("../logs/#{@name}_client.log")
       Celluloid.logger = @logger
+
       @application_id = set_application_id
       @ucwa_entrance = auto_discover @domain
       @entry_point_url = @ucwa_entrance.user.applications.to_s.sub(/\/ucwa.*/, '')
@@ -87,11 +75,10 @@ module Uchiwa
 
           @event_channel_url = @application.events._url
 
-          @activity_timer = every(ACTIVITY_TIMEOUT) do
+          @activity_timer = every(ENV['ACTIVITY_TIMEOUT'].to_i) do
             @application.me.reportMyActivity._post('')
             @logger.info 'reportMyActivity request sent'
           end
-          make_available SigningOptions
         end
 
         def set_application_id
@@ -171,34 +158,19 @@ module Uchiwa
             end
           end
         end
+
+        def start_phone_audio(phone, to)
+          @application.communication.startPhoneAudio._post({operationId: "#{SecureRandom.uuid}",
+                                                            phoneNumber: phone, to: to}.to_json)
+        end
       end
     end
-
-    # TODO: This will work only via conditional request PUT (with the If-Match: "{ETag value}"
-    # new_key = @application.communication[:_attributes].to_h.key('please pass this in a PUT
-    # request')
-    # body[new_key] = body.delete body.key('please pass this in a PUT request')
-    # body[:etag] = @application.communication[:_attributes][:etag]
-    # set_headers @entry_point, body[:etag]
-
-    # def get_contact_list
-    # @application._embedded._get.people.myContacts
-    # @contacts = @application.people.myContacts
-    # end
-
     include Resource::Discover
   end
 
   def Uchiwa.set_headers(end_point, access_token, etag = '')
     end_point.headers.update('Content-Type' =>	'application/json')
     end_point.headers.update('Authorization' => "#{access_token}")
-
-    # This is barely needed - for browsers only
-    # end_point.headers.update('X-Ms-Origin' => 'http://localhost')
-
     end_point.headers.update('Referer' => "#{@xframe_url}")
-
-    # This should be reimplemented to be automatically set on PUT requests if needed
-    # end_point.headers.update('If-Match' => etag) unless etag.empty?
   end
 end
