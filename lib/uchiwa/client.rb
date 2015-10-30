@@ -25,7 +25,6 @@ module Uchiwa
       @ucwa_entrance = auto_discover @domain
       @entry_point_url = @ucwa_entrance.user.applications.to_s.sub(/\/ucwa.*/, '')
       @application = register_application @entry_point_url
-      @logger.info("\n\n@application._links = #{@application._links.inspect}")
       set_application_resources
       @scheduler = Scheduler.new do |s|
         s.url = @event_channel_url
