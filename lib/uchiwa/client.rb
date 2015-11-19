@@ -1,175 +1,102 @@
 # coding: utf-8
+require'uri'
 require 'hyperclient'
 require 'json/ext'
 require '../lib/logger_override'
 require 'celluloid/current'
+require '../lib/hal_resources'
 require '../lib/scheduler'
 require '../lib/event_channel'
 require '../lib/event_handler'
 
 module Uchiwa
   class Client
-    attr_accessor :access_token, :name, :domain
-
     include Celluloid
     include Celluloid::Notifications
     include Celluloid::Internals::Logger
 
-    def initialize
-      yield self
+    def initialize(username, password, domain)
       @logger = ::Logger.new(STDOUT, 'daily')
       @logger.attach("../logs/#{@name}_client.log")
       Celluloid.logger = @logger
 
-      @application_id = set_application_id
-      @ucwa_entrance = auto_discover @domain
-      @entry_point_url = @ucwa_entrance.user.applications.to_s.sub(/\/ucwa.*/, '')
-      @application = register_application @entry_point_url
-      set_application_resources
-      @scheduler = Scheduler.new do |s|
-        s.url = @event_channel_url
-        s.access_token = @access_token
-        s.entry_point = @entry_point_url
-        s.name = @name
-      end
+      @username = username
+      @password = password
+      @domain = domain
+      @ucwa_entrance = auto_discover(domain)
+      @application = register_application
+      set_application
     end
 
-    module Resource
-      module Discover
-        def auto_discover(domain)
-          discoverer = Hyperclient.new("http://lyncdiscover.#{domain}")
-          discoverer.connection.builder.insert_before discoverer.connection.builder.handlers.length - 1, Faraday::Response::Logger, @logger, bodies: true
-          discoverer.headers.update('Content-Type' => 'application/json')
+    private
 
-          begin
-            discoverer.user._get.headers
-          rescue Faraday::Error::ClientError => e1
-            @oauth_url = e1.response[:headers]['www-authenticate'].to_s.match(/href="([^"]*)/)[1]
-          end
+    attr_accessor :username, :password, :domain, :oauth_endpoint, :ucwa_entrance
 
-          @xframe_url = discoverer._links[:xframe]
+    module Application
+      def auto_discover(domain)
+        discoverer = Hyperclient.new("http://lyncdiscover.#{domain}")
+        discoverer.connection.builder.insert_before discoverer.connection.builder.handlers.length - 1, Faraday::Response::Logger, @logger, bodies: true
 
-          # Here would be a GET request to @oauth_url for access_token
-
-          Uchiwa.set_headers discoverer, @access_token
-          discoverer
+        begin
+          discoverer.user._get.headers
+        rescue Faraday::Error::ClientError => e1
+          oauth_url = e1.response[:headers]['www-authenticate'].to_s.match(/href="([^"]*)/)[1]
         end
 
-        def register_application(url)
-          @entry_point = Hyperclient::EntryPoint.new(url)
-          @entry_point.connection.builder.insert_before @entry_point.connection.builder.handlers.length - 1, Faraday::Response::Logger, @logger, bodies: true
-          Uchiwa.set_headers @entry_point, @access_token
+        @xframe_url = discoverer._links[:xframe] # TODO: should've been removed
+        @oauth_endpoint = Hyperclient::EntryPoint.new(oauth_url)
+        oauth_endpoint.connection.builder.insert_before oauth_endpoint.connection.builder.handlers.length - 1, Faraday::Response::Logger, @logger, bodies: true
+        oauth_endpoint.headers.update('Content-Type' =>	'application/x-www-form-urlencoded')
+        authenticate
+        Uchiwa.set_headers(discoverer, oauth_endpoint._attributes['access_token'], discoverer._links[:xframe])
+        discoverer
+      end
 
-          response = @ucwa_entrance.user.applications._post(@application_id.to_json)
-          Hyperclient::Resource.new(response._response.body, @entry_point, response._response)
-        end
+      def authenticate
+        oauth_endpoint._post(URI.encode("grant_type=password&username=#{username}&password=#{password}"))
+      end
 
-        def set_application_resources
-          search_uri = @application.people.search._url
-          @searcher = Hyperclient::Resource.new( { '_links' =>
-                                                   { 'search' =>
-                                                     {'href' => "#{search_uri}/{?query,limit}",
-                                                       'templated' => true } } },
-                                                 @entry_point)
+      def register_application
+        @entry_point_url = @ucwa_entrance.user.applications.to_s.sub(/\/ucwa.*/, '') # TODO: not instance variable
+        @entry_point = Hyperclient::EntryPoint.new(@entry_point_url)
+        @entry_point.connection.builder.insert_before @entry_point.connection.builder.handlers.length - 1, Faraday::Response::Logger, @logger, bodies: true
+        Uchiwa.set_headers(@entry_point, oauth_endpoint._attributes['access_token'], ucwa_entrance._links[:xframe])
+        response = @ucwa_entrance.user.applications._post(application_id.to_json)
+        Hyperclient::Resource.new(response._response.body, @entry_point, response._response)
+      end
 
-          @event_channel_url = @application.events._url
-
-          @activity_timer = every(ENV['ACTIVITY_TIMEOUT'].to_i) do
-            @application.me.reportMyActivity._post('')
-            @logger.info 'reportMyActivity request sent'
-          end
-        end
-
-        def set_application_id
-          {
-            :UserAgent  => 'UCWA Samples',
+      def application_id
+        {
+            :UserAgent  => 'UCWA Connector',
             :EndpointId => SecureRandom.uuid,
-            :Culture    => 'en-US',
-          }
+            :Culture    => 'en-US'
+        }
+      end
+
+      def set_application
+        @event_channel_url = @application.events._url
+        @activity_timer = every(ENV['ACTIVITY_TIMEOUT'].to_i) do
+          @application.me.reportMyActivity._post('')
+          @logger.info 'reportMyActivity request sent'
         end
 
-        def make_available(body)
-          @application.me.makeMeAvailable._post(body.to_json)
-          @application = @application.itself._get
-        end
+        @event_handler = EventHandler.new(@entry_point)
+        @event_channel = EventChannel.new(@event_channel_url, oauth_endpoint._attributes['access_token'], @entry_point._url, ucwa_entrance._links[:xframe])
+        @scheduler = Scheduler.new(@event_handler, @event_channel)
+      end
 
-        def application_refresh
-          @application = @application.itself._get
-        end
-
-        def get_my_presence
-          @my_presence = @application.me.presence._get
-        end
-
-        def set_my_presence(availability)
-          @application.me.presence._post({ availability: availability }.to_json)
-        end
-
-        def get_presence_subscriptions
-          @presence_subscriptions = @application.people.presenceSubscriptions._get
-        end
-
-        def get_subscribed_contacts
-          @subscribed_contacts = @application.people.subscribedContacts._get
-        end
-
-        def search(query, limit = 100)
-          @searcher.search({query: query, limit: limit})._resource
-        end
-
-        def get_my_contacts
-          @my_contacts = @application.people.myContacts._get
-        end
-
-        def get_my_groups
-          @my_groups = @application.people.myGroups._get
-        end
-
-        def get_my_phones
-          @my_phones = @application.me.phones._get
-        end
-
-        def change_number(number = '', visible = false, type)
-          @my_phones.phone.each do |ph|
-            if ph.changeNumber.to_s.include?("#{type}")
-              @entry_point.headers.update('If-Match' => ph.etag)
-              ph.changeNumber._post({ number: number, includeInContactCard: visible }.to_json)
-            end
-          end
-        end
-
-        def get_contact_presence(contact)
-          contact.contactPresence._get
-        end
-
-        def subscribe_to_group_presence(group_name)
-          uris = []
-          @my_groups._embedded.group.each do |g|
-            if g[:name] == group_name
-              group_contacts = g.groupContacts._get._response.body.to_json
-              group_contacts = JSON.parse(group_contacts, object_class: OpenStruct)
-              group_contacts._embedded.contact.each_index do |i|
-                uris[i] = group_contacts._embedded.contact[i].uri
-                i += 1
-              end
-              g.subscribeToGroupPresence._post({:duration => ENV['CONTACT_SUBSCRIPTION_DURATION'],
-                                                                 :uris => uris}.to_json)
-            end
-          end
-        end
-
-        def start_phone_audio(phone, to)
-          @application.communication.startPhoneAudio._post({operationId: "#{SecureRandom.uuid}",
-                                                            phoneNumber: phone, to: to}.to_json)
-        end
+      def application_refresh
+        @application = @application.itself._get
       end
     end
-    include Resource::Discover
+
+    include Application
+    include Resource
   end
 
-  def Uchiwa.set_headers(end_point, access_token, etag = '')
+  def Uchiwa.set_headers(end_point, access_token, xframe_url, etag = '')
     end_point.headers.update('Content-Type' =>	'application/json')
-    end_point.headers.update('Authorization' => "#{access_token}")
-    end_point.headers.update('Referer' => "#{@xframe_url}")
+    end_point.headers.update('Authorization' => "Bearer #{access_token}")
+    end_point.headers.update('Referer' => "#{xframe_url}")
   end
 end
