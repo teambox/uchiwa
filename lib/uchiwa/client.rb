@@ -83,6 +83,7 @@ module Uchiwa
         @event_handler = EventHandler.new(@entry_point)
         @event_channel = EventChannel.new(@event_channel_url, oauth_endpoint._attributes['access_token'], @entry_point._url, ucwa_entrance._links[:xframe])
         @scheduler = Scheduler.new(@event_handler, @event_channel)
+        @searcher = search_resource
       end
 
       def application_refresh
