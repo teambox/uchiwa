@@ -15,6 +15,11 @@ module Uchiwa
     include Celluloid::Notifications
     include Celluloid::Internals::Logger
 
+    SIGNING_OPTIONS = { signInAs: 'Online',
+                        supportedMessageFormats: [ 'Plain', 'Html'],
+                        supportedModalities: ['PhoneAudio', 'Messaging']}
+
+
     def initialize(username, password, domain)
       @logger = ::Logger.new(STDOUT, 'daily')
       logger.attach("../logs/client.log")
@@ -77,17 +82,18 @@ module Uchiwa
       end
 
       def set_application
-        @activity_timer = every(ENV['ACTIVITY_TIMEOUT'].to_i) do
-          application.me.reportMyActivity._post('')
-          logger.info 'reportMyActivity request sent'
-        end
-
         @event_handler = EventHandler.new(entry_point)
         @event_channel = EventChannel.new(application.events._url,
                                           oauth_endpoint._attributes['access_token'],
                                           entry_point._url, ucwa_entrance._links[:xframe])
         @scheduler = Scheduler.new(event_handler, event_channel)
         @searcher = search_resource
+
+        make_available(SIGNING_OPTIONS)
+
+        @activity_timer = every(ENV['ACTIVITY_TIMEOUT'].to_i) do
+          application.me.reportMyActivity._post('')
+        end
       end
 
       def application_refresh
